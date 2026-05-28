@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const db = require('../models');
 const authConfig = require('../config/auth.config');
 const { sendMail, verificationEmailTemplate } = require('../services/mailer');
+const { geocode } = require('../services/geocoder');
 
 const { User, ServiceType } = db;
 const { resolveServiceTypeId } = require('../config/serviceTypeData');
@@ -66,7 +67,11 @@ const buildPayloadForRole = (role, body, hashedPassword, serviceTypeId) => {
     streetAddress: body.streetAddress || null,
     city: body.city || null,
     state: body.state || null,
-    zipCode: body.zipCode || null
+    zipCode: body.zipCode || null,
+    // Providers and realtors must be approved by an admin before they appear
+    // on the public site. Regular users are usable as soon as they verify email.
+    approvalStatus:
+      role === 'service_provider' || role === 'realtor' ? 'pending' : 'approved'
   };
 
   if (role === 'service_provider' || role === 'realtor') {
@@ -126,6 +131,30 @@ exports.register = async (req, res) => {
     payload.verificationToken = generateVerificationToken();
     payload.verificationExpiresAt = new Date(Date.now() + VERIFICATION_TTL_HOURS * 60 * 60 * 1000);
     const account = await User.create(payload);
+
+    // Best-effort geocode of the registration address so providers/realtors
+    // show up in radius searches. We fire-and-forget so signup never blocks
+    // on Nominatim and never fails because of geocoder errors.
+    if (
+      (role === 'service_provider' || role === 'realtor') &&
+      (payload.streetAddress || payload.city || payload.zipCode)
+    ) {
+      geocode({
+        streetAddress: payload.streetAddress,
+        city: payload.city,
+        state: payload.state,
+        zipCode: payload.zipCode
+      }).then(async (coords) => {
+        if (!coords) return;
+        try {
+          account.latitude = coords.lat;
+          account.longitude = coords.lng;
+          await account.save();
+        } catch (err) {
+          console.warn('[geocoder] failed to save coords for user', account.id, err.message);
+        }
+      });
+    }
 
     const sent = await sendVerificationLink(account);
     if (!sent.ok) {

@@ -7,6 +7,7 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "db:reset": "node scripts/db-reset.js",
+    "geocode:backfill": "node scripts/geocode-backfill.js",
     "build:client": "cd ../Reproserve-reactjs && npm ci && npm run build",
     "deploy": "npm ci && npm run build:client && pm2 restart reproserve || pm2 start index.js --name reproserve"
   },

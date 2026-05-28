@@ -16,6 +16,7 @@ const reviewController = require('../controllers/review.controller');
 const favoriteController = require('../controllers/favorite.controller');
 const showMyPropertyController = require('../controllers/showMyProperty.controller');
 const notificationController = require('../controllers/notification.controller');
+const geocodeController = require('../controllers/geocode.controller');
 
 const { verifyToken, requireRole } = require('../middleware/auth.middleware');
 const { validateRegister, validateLogin } = require('../middleware/validate.middleware');
@@ -42,6 +43,8 @@ router.post('/auth/resend-verification', authController.resendVerification);
 
 router.get('/admin/stats', verifyToken, requireRole('admin'), adminController.stats);
 router.get('/admin/users', verifyToken, requireRole('admin'), adminController.listUsers);
+router.get('/admin/pending-approvals', verifyToken, requireRole('admin'), adminController.listPendingApprovals);
+router.put('/admin/users/:id/approval', verifyToken, requireRole('admin'), adminController.setApprovalStatus);
 
 
 //  ============================================================
@@ -136,6 +139,13 @@ router.delete('/projects/:id', projectController.remove);
 
 router.get('/providers', providerController.findAll);
 router.get('/providers/:id', providerController.findOne);
+
+
+//  ============================================================
+//  GEOCODE PROXY  (controller: geocode.controller.js)
+//  GET /api/geocode?q=<address-or-zip>   — public, returns { lat, lng }
+
+router.get('/geocode', geocodeController.geocode);
 
 
 //  ============================================================

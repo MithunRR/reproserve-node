@@ -58,6 +58,18 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true
     },
 
+    // Geocoded coordinates of streetAddress/city/state/zipCode. Populated at
+    // signup by services/geocoder.js (best-effort — null if geocoding fails or
+    // the address is too vague). Powers the "providers within Nkm" search.
+    latitude: {
+      type: DataTypes.DECIMAL(10, 7),
+      allowNull: true
+    },
+    longitude: {
+      type: DataTypes.DECIMAL(10, 7),
+      allowNull: true
+    },
+
     businessName: {
       type: DataTypes.STRING(150),
       allowNull: true
@@ -79,6 +91,15 @@ module.exports = (sequelize, DataTypes) => {
     isActive: {
       type: DataTypes.BOOLEAN,
       defaultValue: true
+    },
+
+    // Service providers and realtors are gated behind admin approval before
+    // they show up on the public listings. Users and admins are auto-approved
+    // (see auth.controller.buildPayloadForRole and bootstrapAdmin).
+    approvalStatus: {
+      type: DataTypes.ENUM('pending', 'approved', 'rejected'),
+      allowNull: false,
+      defaultValue: 'pending'
     },
 
     // Email-verification-link flow. emailVerified flips true after the user
