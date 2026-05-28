@@ -2,7 +2,11 @@
  * Admin-only endpoints. Gated by verifyToken + requireRole('admin') in routes.
  */
 const db = require('../models');
-const { User, Quote, ShowMyProperty, OpenHouse, Review, ContactMessage } = db;
+const { Op } = require('sequelize');
+const { User, Quote, ShowMyProperty, OpenHouse, Review, ContactMessage, ServiceType } = db;
+
+const PROVIDER_ROLES = ['service_provider', 'realtor'];
+const APPROVAL_STATUSES = ['pending', 'approved', 'rejected'];
 
 const userPublicAttrs = ['id', 'role', 'firstName', 'lastName', 'email', 'createdAt'];
 
@@ -86,6 +90,75 @@ exports.listUsers = async (req, res) => {
       attributes: { exclude: ['password', 'verificationToken'] }
     });
     return res.status(200).json({ success: true, count: users.length, data: users });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// GET /api/admin/pending-approvals?role=service_provider|realtor
+// Returns provider/realtor accounts whose approvalStatus is 'pending'. With no
+// `role` query, returns both, separated under data.serviceProviders and
+// data.realtors so the dashboard can render them side-by-side.
+exports.listPendingApprovals = async (req, res) => {
+  try {
+    const { role } = req.query;
+    const roleFilter = role && PROVIDER_ROLES.includes(role)
+      ? role
+      : { [Op.in]: PROVIDER_ROLES };
+
+    const rows = await User.findAll({
+      where: { role: roleFilter, approvalStatus: 'pending' },
+      attributes: { exclude: ['password', 'verificationToken'] },
+      include: [{ model: ServiceType, as: 'serviceType' }],
+      order: [['createdAt', 'DESC']]
+    });
+
+    const data = {
+      serviceProviders: rows.filter((u) => u.role === 'service_provider'),
+      realtors:         rows.filter((u) => u.role === 'realtor')
+    };
+    return res.status(200).json({
+      success: true,
+      count: rows.length,
+      data
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// PUT /api/admin/users/:id/approval  { status: 'approved' | 'rejected' }
+// Flips the approvalStatus on a single user. Only provider/realtor rows are
+// targetable — users and admins do not go through approval.
+exports.setApprovalStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body || {};
+
+    if (!APPROVAL_STATUSES.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `status must be one of ${APPROVAL_STATUSES.join(', ')}`
+      });
+    }
+
+    const user = await User.findByPk(id);
+    if (!user || !PROVIDER_ROLES.includes(user.role)) {
+      return res.status(404).json({ success: false, message: 'Provider/realtor account not found' });
+    }
+
+    user.approvalStatus = status;
+    await user.save();
+
+    const sanitised = user.toJSON();
+    delete sanitised.password;
+    delete sanitised.verificationToken;
+
+    return res.status(200).json({
+      success: true,
+      message: `Account ${status}`,
+      data: sanitised
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }

@@ -19,13 +19,18 @@ const ratingSummary = async (providerId) => {
 const completedJobsCount = (providerId) =>
   Quote.count({ where: { providerId, status: 'closed' } });
 
-// GET /providers?role=&serviceTypeId=&search=&city=&state=
+// GET /providers?role=&serviceTypeId=&search=&city=&state=&lat=&lng=&radius=
+// When lat+lng+radius are supplied, providers further than `radius` km from
+// (lat, lng) are excluded (Haversine in SQL) and each record carries a
+// `distanceKm` field. Without those params, behaviour is unchanged.
 exports.findAll = async (req, res) => {
   try {
-    const { role, serviceTypeId, search, city, state } = req.query;
+    const { role, serviceTypeId, search, city, state, lat, lng, radius } = req.query;
 
     const where = {
-      role: role && PROVIDER_ROLES.includes(role) ? role : { [Op.in]: PROVIDER_ROLES }
+      role: role && PROVIDER_ROLES.includes(role) ? role : { [Op.in]: PROVIDER_ROLES },
+      // Public listings only ever show admin-approved providers/realtors.
+      approvalStatus: 'approved'
     };
     if (serviceTypeId) where.serviceTypeId = serviceTypeId;
     if (city) where.city = { [Op.like]: `%${city}%` };
@@ -39,20 +44,59 @@ exports.findAll = async (req, res) => {
       ];
     }
 
-    const records = await User.findAll({
+    // Optional radius search (Haversine, km). Only kicks in when caller sent
+    // a usable lat/lng/radius triple; anything else falls through to the
+    // ordinary listing query above.
+    const latNum = parseFloat(lat);
+    const lngNum = parseFloat(lng);
+    const radiusKm = parseFloat(radius);
+    const useRadius =
+      Number.isFinite(latNum) && Number.isFinite(lngNum) && Number.isFinite(radiusKm) && radiusKm > 0;
+
+    const queryOpts = {
       where,
       attributes: { exclude: ['password'] },
       order: [['createdAt', 'DESC']],
       include: [{ model: ServiceType, as: 'serviceType' }]
-    });
+    };
+
+    if (useRadius) {
+      // Earth radius 6371 km. acos(...) gives the angle in radians; multiplied
+      // by the radius it yields surface distance in km. Providers with NULL
+      // coords are excluded since the column comparison would be NULL.
+      const distanceExpr = db.sequelize.literal(`
+        (6371 * acos(
+          cos(radians(${latNum})) * cos(radians(latitude)) *
+          cos(radians(longitude) - radians(${lngNum})) +
+          sin(radians(${latNum})) * sin(radians(latitude))
+        ))
+      `);
+
+      queryOpts.attributes = {
+        exclude: ['password'],
+        include: [[distanceExpr, 'distanceKm']]
+      };
+      where.latitude  = { [Op.ne]: null };
+      where.longitude = { [Op.ne]: null };
+      queryOpts.having = db.sequelize.where(distanceExpr, { [Op.lte]: radiusKm });
+      queryOpts.order = [[db.sequelize.literal('distanceKm'), 'ASC']];
+    }
+
+    const records = await User.findAll(queryOpts);
 
     // Attach rating summary to each provider.
     const data = await Promise.all(
-      records.map(async (provider) => ({
-        ...provider.toJSON(),
-        ...(await ratingSummary(provider.id)),
-        completedJobs: await completedJobsCount(provider.id)
-      }))
+      records.map(async (provider) => {
+        const json = provider.toJSON();
+        if (json.distanceKm != null) {
+          json.distanceKm = Number(Number(json.distanceKm).toFixed(2));
+        }
+        return {
+          ...json,
+          ...(await ratingSummary(provider.id)),
+          completedJobs: await completedJobsCount(provider.id)
+        };
+      })
     );
 
     return res.status(200).json({ success: true, count: data.length, data });
@@ -69,7 +113,7 @@ exports.findOne = async (req, res) => {
       include: [{ model: ServiceType, as: 'serviceType' }]
     });
 
-    if (!provider || !PROVIDER_ROLES.includes(provider.role)) {
+    if (!provider || !PROVIDER_ROLES.includes(provider.role) || provider.approvalStatus !== 'approved') {
       return res.status(404).json({ success: false, message: 'Provider not found' });
     }
 

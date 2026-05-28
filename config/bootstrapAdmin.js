@@ -36,7 +36,8 @@ async function bootstrapAdmin(db) {
     email,
     password: hashed,
     emailVerified: true,
-    isActive: true
+    isActive: true,
+    approvalStatus: 'approved'
   });
   console.log(`[bootstrapAdmin] created admin id=${account.id} email=${email}`);
 }
