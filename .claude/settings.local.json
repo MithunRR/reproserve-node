@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node _gen-api-doc.js)"
+    ]
+  }
+}
