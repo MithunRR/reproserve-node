@@ -1,7 +1,8 @@
 const db = require('../models');
+const { fn, col, where: sqlWhere, Op } = require('sequelize');
 const { collectPhotoPaths } = require('../middleware/upload.middleware');
 
-const { Quote, QuoteResponse, User, Notification } = db;
+const { Quote, QuoteResponse, User, Notification, ServiceType } = db;
 
 const PROVIDER_ROLES = ['service_provider', 'realtor'];
 
@@ -15,8 +16,12 @@ const providerInclude = () => ({
   model: User, as: 'provider',
   attributes: ['id', 'firstName', 'lastName', 'email', 'role', 'businessName']
 });
-const responsesInclude = () => ({
+const responsesInclude = (forProviderId) => ({
   model: QuoteResponse, as: 'responses',
+  // When a provider is viewing the list, scope the included responses to
+  // their own — providers should not see what other providers quoted.
+  where: forProviderId ? { providerId: forProviderId } : undefined,
+  required: false,
   include: [{
     model: User, as: 'provider',
     attributes: ['id', 'firstName', 'lastName', 'email', 'role', 'businessName']
@@ -70,22 +75,55 @@ exports.create = async (req, res) => {
       isMeetingRequest: String(isMeetingRequest) === 'true'
     });
 
-    // Notify the targeted provider/realtor of the incoming request. Best-effort:
-    // a notification failure must not fail the quote that was already created.
-    if (record.providerId) {
-      try {
-        const isMeeting = record.isMeetingRequest;
-        await Notification.create({
-          userId: record.providerId,
-          type: isMeeting ? 'meeting_request' : 'quote_request',
-          title: isMeeting ? 'New meeting request' : 'New quote request',
-          message: `${record.name || 'Someone'} sent you ${isMeeting ? 'a meeting request' : 'a quote request'}` +
-            `${record.category ? ` for ${record.category}` : ''}.`,
-          link: `/request/${record.id}`
-        });
-      } catch (notifyErr) {
-        console.error('Quote notification failed:', notifyErr.message);
+    // Notify providers about the incoming request. Best-effort: a notification
+    // failure must not fail the quote that was already created.
+    //   - If providerId is set, that specific provider/realtor gets a direct ping.
+    //   - Additionally, every service_provider whose serviceTypeId matches the
+    //     quote's category (looked up case-insensitively against ServiceType.name)
+    //     is notified so the request reaches the relevant pool, not just one
+    //     hand-picked provider.
+    try {
+      const isMeeting = record.isMeetingRequest;
+      const notifyUserIds = new Set();
+
+      if (record.providerId) {
+        notifyUserIds.add(record.providerId);
       }
+
+      if (record.category) {
+        const serviceType = await ServiceType.findOne({
+          where: sqlWhere(fn('LOWER', col('name')), String(record.category).trim().toLowerCase())
+        });
+        if (serviceType) {
+          const categoryProviders = await User.findAll({
+            where: {
+              serviceTypeId: serviceType.id,
+              role: 'service_provider',
+              id: { [Op.ne]: record.userId },
+              isActive: true
+            },
+            attributes: ['id']
+          });
+          categoryProviders.forEach((p) => notifyUserIds.add(p.id));
+        }
+      }
+
+      if (notifyUserIds.size > 0) {
+        const title = isMeeting ? 'New meeting request' : 'New quote request';
+        const message = `${record.name || 'Someone'} posted ${isMeeting ? 'a meeting request' : 'a quote request'}` +
+          `${record.category ? ` for ${record.category}` : ''}.`;
+        await Notification.bulkCreate(
+          Array.from(notifyUserIds).map((uid) => ({
+            userId: uid,
+            type: isMeeting ? 'meeting_request' : 'quote_request',
+            title,
+            message,
+            link: `/request/${record.id}`
+          }))
+        );
+      }
+    } catch (notifyErr) {
+      console.error('Quote notification failed:', notifyErr.message);
     }
 
     return res.status(201).json({ success: true, message: 'Quote request submitted', data: record });
@@ -99,14 +137,37 @@ exports.findAll = async (req, res) => {
     const { userId, providerId, status, isMeetingRequest } = req.query;
     const where = {};
     if (userId) where.userId = userId;
-    if (providerId) where.providerId = providerId;
     if (status) where.status = status;
     if (isMeetingRequest !== undefined) where.isMeetingRequest = String(isMeetingRequest) === 'true';
+
+    // For providers, "incoming" requests are:
+    //   1. Quotes targeted directly at them (providerId = me), OR
+    //   2. Broadcast quotes (providerId = NULL) whose category matches their
+    //      registered serviceType — these are the ones the notification fan-out
+    //      also reaches, so the Client Requests tab needs to surface them.
+    if (providerId) {
+      const provider = await User.findByPk(providerId, {
+        attributes: ['id', 'serviceTypeId']
+      });
+      const orClauses = [{ providerId }];
+      if (provider && provider.serviceTypeId) {
+        const serviceType = await ServiceType.findByPk(provider.serviceTypeId);
+        if (serviceType && serviceType.name) {
+          orClauses.push({
+            providerId: null,
+            [Op.and]: [
+              sqlWhere(fn('LOWER', col('Quote.category')), String(serviceType.name).trim().toLowerCase())
+            ]
+          });
+        }
+      }
+      where[Op.or] = orClauses;
+    }
 
     const records = await Quote.findAll({
       where,
       order: [['createdAt', 'DESC']],
-      include: [requesterInclude(), providerInclude(), responsesInclude()]
+      include: [requesterInclude(), providerInclude(), responsesInclude(providerId)]
     });
     return res.status(200).json({ success: true, count: records.length, data: records });
   } catch (err) {

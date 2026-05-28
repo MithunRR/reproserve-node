@@ -1,4 +1,5 @@
 const db = require('../models');
+const { Op, fn, col, where } = require('sequelize');
 
 const { OpenHouseAttendance, OpenHouse, User } = db;
 
@@ -24,6 +25,37 @@ exports.create = async (req, res) => {
       const user = await User.findByPk(userId);
       if (!user) {
         return res.status(400).json({ success: false, message: 'Invalid userId — user not found' });
+      }
+    }
+
+    // The creator of the open house cannot RSVP to their own listing.
+    if (userId && openHouse.userId && String(openHouse.userId) === String(userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You cannot register attendance for your own open house.'
+      });
+    }
+
+    // Prevent duplicate RSVPs — match by userId (authoritative) and by email
+    // as a fallback for guest submissions.
+    const duplicateClauses = [];
+    if (userId) duplicateClauses.push({ userId });
+    const normalizedEmail = email ? String(email).trim().toLowerCase() : '';
+    if (normalizedEmail) {
+      duplicateClauses.push(where(fn('LOWER', col('email')), normalizedEmail));
+    }
+    if (duplicateClauses.length > 0) {
+      const existing = await OpenHouseAttendance.findOne({
+        where: {
+          openHouseId: openHouse.id,
+          [Op.or]: duplicateClauses
+        }
+      });
+      if (existing) {
+        return res.status(409).json({
+          success: false,
+          message: 'You are already registered for this open house using same email.'
+        });
       }
     }
 
