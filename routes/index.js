@@ -112,13 +112,15 @@ router.put('/quote-responses/:id', quoteController.updateResponse);
 
 //  ============================================================
 //  MESSAGE ROUTES  (controller: message.controller.js)
-//  Base: /api/messages
+//  Base: /api/messages   —   all routes require a valid JWT.
+//  Sender is always taken from the token, not the body.
 
-router.post('/messages', messageController.create);
-router.get('/messages/conversations', messageController.conversations);
-router.get('/messages', messageController.findAll);
-router.put('/messages/:id/read', messageController.markRead);
-router.delete('/messages/:id', messageController.remove);
+router.post('/messages', verifyToken, messageController.create);
+router.get('/messages/conversations', verifyToken, messageController.conversations);
+router.get('/messages/unread-count', verifyToken, messageController.unreadCount);
+router.get('/messages', verifyToken, messageController.findAll);
+router.put('/messages/:id/read', verifyToken, messageController.markRead);
+router.delete('/messages/:id', verifyToken, messageController.remove);
 
 
 //  ============================================================

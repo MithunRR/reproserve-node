@@ -1,13 +1,16 @@
 require('dotenv').config();
 const path = require('path');
+const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
+const { Server } = require('socket.io');
 
 const db = require('./models');
 const routes = require('./routes');
 const { seedServiceTypes } = require('./config/serviceTypeData');
 const { bootstrapAdmin } = require('./config/bootstrapAdmin');
+const { initChatSocket } = require('./sockets/chat');
 
 const app = express();
 
@@ -63,6 +66,30 @@ const runSync = () => {
   return db.sequelize.sync();
 };
 
+// Wrap Express in an HTTP server so Socket.IO can share the same port.
+const server = http.createServer(app);
+
+const io = new Server(server, {
+  cors: { origin: true, credentials: true },
+  // Allow same-origin in prod (Express serves the SPA) and the Vite dev
+  // origin (vite.config proxies /socket.io through to here).
+  path: '/socket.io'
+});
+
+// Make the io instance reachable from REST controllers, e.g.
+// req.app.get('io').to(`user:${id}`).emit(...)
+app.set('io', io);
+initChatSocket(io, db);
+
+// Real-time notifications. A single Sequelize hook covers every place that
+// calls `Notification.create(...)` — controllers, scripts, future code paths
+// — so we never have to remember to emit manually. (bulkCreate is not used,
+// but if added it must pass `individualHooks: true` to trigger this.)
+db.Notification.addHook('afterCreate', (notification) => {
+  if (!notification?.userId) return;
+  io.to(`user:${notification.userId}`).emit('notification:new', notification);
+});
+
 db.sequelize
   .authenticate()
   .then(() => {
@@ -73,7 +100,7 @@ db.sequelize
   .then(() => bootstrapAdmin(db))
   .then(() => {
     console.log('Schema sync complete.');
-    app.listen(PORT, () => {
+    server.listen(PORT, () => {
       console.log(`ReproServe server is running on port ${PORT}`);
     });
   })

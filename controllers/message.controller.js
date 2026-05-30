@@ -7,43 +7,52 @@ const userAttrs = ['id', 'firstName', 'lastName', 'email', 'role', 'businessName
 const senderInclude = { model: User, as: 'sender', attributes: userAttrs };
 const receiverInclude = { model: User, as: 'receiver', attributes: userAttrs };
 
+// REST fallback for sending a message. Mirrors the socket path so a client
+// without an active socket can still POST. Sender is taken from the JWT,
+// never the body, so a user can't impersonate someone else.
 exports.create = async (req, res) => {
   try {
-    const { senderId, receiverId, content } = req.body;
-    if (!senderId || !receiverId || !content || !content.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: 'senderId, receiverId and content are required'
-      });
+    const senderId = req.userId;
+    const receiverId = Number(req.body?.receiverId);
+    const content = (req.body?.content || '').toString().trim();
+
+    if (!senderId || !receiverId || !content) {
+      return res.status(400).json({ success: false, message: 'receiverId and content are required' });
     }
-    if (Number(senderId) === Number(receiverId)) {
+    if (Number(senderId) === receiverId) {
       return res.status(400).json({ success: false, message: 'Cannot send a message to yourself' });
     }
 
-    const [sender, receiver] = await Promise.all([
-      User.findByPk(senderId),
-      User.findByPk(receiverId)
-    ]);
-    if (!sender || !receiver) {
-      return res.status(400).json({ success: false, message: 'Invalid senderId or receiverId' });
+    const receiver = await User.findByPk(receiverId, { attributes: ['id'] });
+    if (!receiver) {
+      return res.status(400).json({ success: false, message: 'Invalid receiverId' });
     }
 
-    const record = await Message.create({ senderId, receiverId, content: content.trim() });
-    return res.status(201).json({ success: true, message: 'Message sent', data: record });
+    const record = await Message.create({ senderId, receiverId, content });
+    const enriched = await Message.findByPk(record.id, {
+      include: [senderInclude, receiverInclude]
+    });
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`user:${receiverId}`).emit('message:new', enriched);
+      io.to(`user:${senderId}`).emit('message:new', enriched);
+    }
+
+    return res.status(201).json({ success: true, message: 'Message sent', data: enriched });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
 };
 
-// GET /messages?userId=&withUserId=
-// With both params → the conversation thread between the two users.
-// With only userId → every message the user is part of.
+// GET /messages?withUserId=<peerId>
+//   thread between the authenticated user and the given peer
+// GET /messages
+//   every message the authenticated user is part of (rarely needed by UI)
 exports.findAll = async (req, res) => {
   try {
-    const { userId, withUserId } = req.query;
-    if (!userId) {
-      return res.status(400).json({ success: false, message: 'userId query param is required' });
-    }
+    const userId = req.userId;
+    const { withUserId } = req.query;
 
     let where;
     if (withUserId) {
@@ -63,12 +72,14 @@ exports.findAll = async (req, res) => {
       include: [senderInclude, receiverInclude]
     });
 
-    // Reading a thread marks the partner's messages as read.
+    // Opening a thread marks the partner's messages as read.
     if (withUserId) {
       await Message.update(
         { isRead: true },
         { where: { senderId: withUserId, receiverId: userId, isRead: false } }
       );
+      const io = req.app.get('io');
+      if (io) io.to(`user:${withUserId}`).emit('message:read', { by: userId, peerId: Number(withUserId) });
     }
 
     return res.status(200).json({ success: true, count: records.length, data: records });
@@ -77,15 +88,12 @@ exports.findAll = async (req, res) => {
   }
 };
 
-// GET /messages/conversations?userId=
-// One entry per conversation partner: their info, the last message, unread count.
+// GET /messages/conversations
+// One entry per conversation partner with their info, the most recent
+// message, and an unread count for the current user.
 exports.conversations = async (req, res) => {
   try {
-    const { userId } = req.query;
-    if (!userId) {
-      return res.status(400).json({ success: false, message: 'userId query param is required' });
-    }
-    const uid = Number(userId);
+    const uid = Number(req.userId);
 
     const records = await Message.findAll({
       where: { [Op.or]: [{ senderId: uid }, { receiverId: uid }] },
@@ -115,11 +123,26 @@ exports.conversations = async (req, res) => {
   }
 };
 
+// GET /messages/unread-count  →  { total }  – used to seed the header badge.
+exports.unreadCount = async (req, res) => {
+  try {
+    const total = await Message.count({
+      where: { receiverId: req.userId, isRead: false }
+    });
+    return res.status(200).json({ success: true, total });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 exports.markRead = async (req, res) => {
   try {
     const record = await Message.findByPk(req.params.id);
     if (!record) {
       return res.status(404).json({ success: false, message: 'Message not found' });
+    }
+    if (Number(record.receiverId) !== Number(req.userId)) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
     }
     record.isRead = true;
     await record.save();
@@ -134,6 +157,9 @@ exports.remove = async (req, res) => {
     const record = await Message.findByPk(req.params.id);
     if (!record) {
       return res.status(404).json({ success: false, message: 'Message not found' });
+    }
+    if (Number(record.senderId) !== Number(req.userId) && Number(record.receiverId) !== Number(req.userId)) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
     }
     await record.destroy();
     return res.status(200).json({ success: true, message: 'Message deleted' });
