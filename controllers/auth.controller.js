@@ -40,12 +40,13 @@ const sanitize = (instance) => {
   return obj;
 };
 
-const signToken = (account) =>
-  jwt.sign(
-    { id: account.id, email: account.email, role: account.role },
-    authConfig.secret,
-    { expiresIn: authConfig.expiresIn }
-  );
+const signToken = (account) => {
+  const payload = { id: account.id, email: account.email, role: account.role };
+  // Only attach an expiry when one is configured; otherwise the token never
+  // expires and the user stays logged in until they log out manually.
+  const options = authConfig.expiresIn ? { expiresIn: authConfig.expiresIn } : {};
+  return jwt.sign(payload, authConfig.secret, options);
+};
 
 // Sanitises the "Register as -" radio value. Falls back to deriving it from
 // role so legacy callers (or missing field) still produce a sensible value.
