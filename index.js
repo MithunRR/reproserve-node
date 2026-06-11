@@ -11,10 +11,17 @@ const routes = require('./routes');
 const { seedServiceTypes } = require('./config/serviceTypeData');
 const { bootstrapAdmin } = require('./config/bootstrapAdmin');
 const { initChatSocket } = require('./sockets/chat');
+const { systemLock, isLocked } = require('./middleware/systemLock');
 
 const app = express();
 
 app.use(cors());
+
+// System lock — must run BEFORE any route, static file, or SPA fallback so a
+// locked app serves only the "contact the developer" notice. See
+// middleware/systemLock.js. Reversible via LOCK_DATE / LOCK_ENABLED in .env.
+app.use(systemLock);
+
 app.use(bodyParser.json({ limit: '10mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -79,6 +86,14 @@ const io = new Server(server, {
 // Make the io instance reachable from REST controllers, e.g.
 // req.app.get('io').to(`user:${id}`).emit(...)
 app.set('io', io);
+
+// Socket.IO handles /socket.io itself, before Express middleware runs, so the
+// lock has to be re-checked here to refuse realtime connections when locked.
+io.use((socket, next) => {
+  if (isLocked()) return next(new Error('Service unavailable'));
+  next();
+});
+
 initChatSocket(io, db);
 
 // Real-time notifications. A single Sequelize hook covers every place that
