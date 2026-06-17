@@ -17,6 +17,7 @@ const favoriteController = require('../controllers/favorite.controller');
 const showMyPropertyController = require('../controllers/showMyProperty.controller');
 const notificationController = require('../controllers/notification.controller');
 const geocodeController = require('../controllers/geocode.controller');
+const assistantController = require('../controllers/assistant.controller');
 
 const { verifyToken, requireRole } = require('../middleware/auth.middleware');
 const { validateRegister, validateLogin } = require('../middleware/validate.middleware');
@@ -148,6 +149,14 @@ router.get('/providers/:id', providerController.findOne);
 //  GET /api/geocode?q=<address-or-zip>   — public, returns { lat, lng }
 
 router.get('/geocode', geocodeController.geocode);
+
+
+//  ============================================================
+//  ASSISTANT (AI CHATBOT) ROUTE  (controller: assistant.controller.js)
+//  Base: /api/assistant   —   public; answers questions about providers,
+//  realtors, open houses and services from live data via Gemini function-calling.
+
+router.post('/assistant', assistantController.chat);
 
 
 //  ============================================================
