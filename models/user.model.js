@@ -117,6 +117,28 @@ module.exports = (sequelize, DataTypes) => {
     verificationExpiresAt: {
       type: DataTypes.DATE,
       allowNull: true
+    },
+
+    // Trust-indicator / public-profile fields (service providers & realtors).
+    // profilePhoto holds either an absolute http(s) URL (sample data) or a
+    // same-origin "/uploads/<file>" path for uploads. specialties stores a
+    // JSON-encoded string array. responseTime is a free-text SLA hint
+    // (e.g. "Within 1 hour"). yearsOfExperience is a plain integer.
+    profilePhoto: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    specialties: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    responseTime: {
+      type: DataTypes.STRING(50),
+      allowNull: true
+    },
+    yearsOfExperience: {
+      type: DataTypes.INTEGER,
+      allowNull: true
     }
   }, {
     tableName: 'users',

@@ -27,6 +27,11 @@ app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 
 app.use('/assets', express.static(path.join(__dirname, 'assets')));
 
+// Profile photos are written to the shared assets/photos folder but exposed
+// under the same-origin /uploads/<file> path the frontend expects (see
+// POST /api/profile/photo). Points at the same physical dir as /assets/photos.
+app.use('/uploads', express.static(path.join(__dirname, 'assets', 'photos')));
+
 // API routes first — anything under /api goes to the backend.
 app.use('/api', routes);
 

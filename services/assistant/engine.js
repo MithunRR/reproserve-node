@@ -13,9 +13,13 @@
 //     ASSISTANT_MODEL   (optional)   default 'gemini-2.5-flash'
 // ---------------------------------------------------------------------------
 const skills = require('./skills');
+const { PLATFORM_HELP } = require('./help');
 
 const API_KEY = (process.env.GEMINI_API_KEY || '').trim();
-const MODEL = (process.env.ASSISTANT_MODEL || 'gemini-2.5-flash').trim();
+// flash-lite has the most generous free-tier daily quota and is plenty for
+// this assistant. Override with ASSISTANT_MODEL (e.g. gemini-2.5-flash) if you
+// enable billing or want a stronger model.
+const MODEL = (process.env.ASSISTANT_MODEL || 'gemini-2.5-flash-lite').trim();
 const MAX_TOOL_HOPS = 5;
 
 // --- Tool catalogue exposed to the model ----------------------------------
@@ -115,22 +119,33 @@ function buildSystemPrompt(context = {}) {
   return [
     'You are the ReproServe Assistant, a friendly guide on a home-services and',
     'real-estate marketplace. You help visitors find service providers (plumbers,',
-    'electricians, cleaners, inspectors, etc.), realtors, and open houses.',
+    'electricians, cleaners, inspectors, etc.), realtors, and open houses, AND you',
+    'explain how to use the platform (registering, listing a property, requesting a',
+    'quote, RSVPing, etc.).',
+    '',
+    'You have two ways to answer:',
+    '1. DATA questions (find/look up providers, realtors, open houses, services) →',
+    '   call the tools; they return live data.',
+    '2. HOW-TO / usage questions ("how do I…", "where do I…", "can I…") → answer',
+    '   directly from the "HOW TO USE REPROSERVE" guide below. Give the actual steps',
+    '   instantly — never tell the user to "visit the website" or "contact support".',
     '',
     'Rules:',
-    '- Answer ONLY using the tools, which return live platform data.',
-    '- Never invent providers, realtors, ratings, prices, phone numbers or listings.',
-    '- If a tool returns nothing, say so honestly and suggest a nearby city or a',
-    '  related service instead of making something up.',
-    '- Do not demand a city for general questions. If the user asks for top-rated or',
-    '  best providers without naming a place, just call the tool with no city and',
-    '  return the best-rated overall. Only use location for explicit "near me" asks.',
-    '- Keep replies short and skimmable; use compact bullets for lists and include',
-    "  each provider's name, service, city and rating.",
-    '- For questions unrelated to ReproServe, politely steer back to what you can help with.',
+    '- For data, never invent providers, realtors, ratings, prices, phone numbers or',
+    '  listings — only report what the tools return. If a tool returns nothing, say so',
+    '  honestly and suggest a nearby city or related service.',
+    '- Do not demand a city for general questions. For "top-rated/best providers" with',
+    '  no place named, call the tool with no city and return the best-rated overall.',
+    '  Only use location for explicit "near me" asks.',
+    '- If a question combines both (e.g. "how do I register to show my property"),',
+    '  give the relevant how-to steps from the guide.',
+    '- Keep replies short and skimmable; use compact numbered steps or bullets.',
+    '- Only steer back if a question is truly unrelated to ReproServe or home/real-estate services.',
     where
       ? `- The user's location is ${where}; use it for "near me" / "in my area" unless they name another place.`
-      : '- The user has not shared a location; ask for a city if they say "near me".'
+      : '- The user has not shared a location; ask for a city if they say "near me".',
+    '',
+    PLATFORM_HELP
   ].join('\n');
 }
 
@@ -148,8 +163,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function callGemini(body) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
-  // 503 (model overloaded) and 429 (rate limit) are transient on the free tier,
-  // so retry a couple of times with a short backoff before giving up.
+  // 503 (model briefly overloaded) is worth a quick inline retry. 429 (rate
+  // limit) is NOT — retrying just burns more quota and the reset is longer than
+  // we'd wait inline — so fail fast and let the controller return a soft message.
   let lastErr;
   for (let attempt = 0; attempt < 3; attempt++) {
     const resp = await fetch(url, {
@@ -162,7 +178,7 @@ async function callGemini(body) {
     const detail = await resp.text().catch(() => '');
     lastErr = new Error(`Gemini API ${resp.status}: ${detail.slice(0, 300)}`);
     lastErr.status = resp.status;
-    if (resp.status !== 503 && resp.status !== 429) break; // non-transient → fail fast
+    if (resp.status !== 503) break; // only overloads are retried
     await sleep(800 * (attempt + 1));
   }
   throw lastErr;

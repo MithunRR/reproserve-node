@@ -21,7 +21,7 @@ const assistantController = require('../controllers/assistant.controller');
 
 const { verifyToken, requireRole } = require('../middleware/auth.middleware');
 const { validateRegister, validateLogin } = require('../middleware/validate.middleware');
-const { openHouseUpload, photosUpload, handleUploadError } = require('../middleware/upload.middleware');
+const { openHouseUpload, photosUpload, profilePhotoUpload, handleUploadError } = require('../middleware/upload.middleware');
 
 //  ============================================================
 //  AUTH ROUTES  (controller: auth.controller.js)
@@ -43,6 +43,7 @@ router.post('/auth/resend-verification', authController.resendVerification);
 //  Base: /api/admin   —   admin-only
 
 router.get('/admin/stats', verifyToken, requireRole('admin'), adminController.stats);
+router.get('/admin/stats/growth', verifyToken, requireRole('admin'), adminController.growth);
 router.get('/admin/users', verifyToken, requireRole('admin'), adminController.listUsers);
 router.get('/admin/pending-approvals', verifyToken, requireRole('admin'), adminController.listPendingApprovals);
 router.put('/admin/users/:id/approval', verifyToken, requireRole('admin'), adminController.setApprovalStatus);
@@ -62,6 +63,9 @@ router.delete('/contact/:id', verifyToken, requireRole('admin'), contactControll
 //  ============================================================
 //  PROFILE ROUTES  (controller: profile.controller.js)
 //  Base: /api/profile
+
+//  Authenticated profile-photo upload (multipart/form-data, field "photo").
+router.post('/profile/photo', verifyToken, profilePhotoUpload, handleUploadError, settingsController.uploadPhoto);
 
 router.get('/profile/:id', settingsController.findOne);
 router.put('/profile/:id', settingsController.update);

@@ -43,6 +43,21 @@ const openHouseUpload = upload.fields([
   { name: 'video', maxCount: 1 }
 ]);
 
+// Profile-photo upload — single image field "photo", reuses the same on-disk
+// PHOTOS_DIR as every other photo upload but enforces an image-only filter and
+// a tighter 5 MB size limit. Files land in the same folder, exposed at the
+// /uploads/<file> same-origin path (see index.js static mount).
+const UPLOADS_URL_PREFIX = '/uploads';
+
+const profilePhotoUpload = multer({
+  storage,
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) return cb(null, true);
+    return cb(new Error('Only image files are allowed'), false);
+  },
+  limits: { fileSize: 5 * 1024 * 1024 } // 5 MB
+}).single('photo');
+
 // Generic photo-only upload — reused by quotes, projects and show-my-property.
 const photosUpload = upload.fields([
   { name: 'photos', maxCount: 10 }
@@ -65,9 +80,12 @@ module.exports = {
   upload,
   openHouseUpload,
   photosUpload,
+  profilePhotoUpload,
   collectPhotoPaths,
   handleUploadError,
   PHOTOS_URL_PREFIX,
   VIDEOS_URL_PREFIX,
+  UPLOADS_URL_PREFIX,
+  PHOTOS_DIR,
   ASSETS_DIR
 };

@@ -82,6 +82,70 @@ exports.stats = async (req, res) => {
   }
 };
 
+// GET /api/admin/stats/growth
+// Returns the last 6 calendar months INCLUDING the current month, oldest first,
+// with per-month counts of new users, quotes, listings and open houses. Buckets
+// are computed in JS (month-of-createdAt) so the result is DB-agnostic and
+// always zero-filled for empty months.
+exports.growth = async (req, res) => {
+  try {
+    const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                          'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+    const now = new Date();
+    // First day (00:00) of the oldest bucket = current month minus 5.
+    const windowStart = new Date(now.getFullYear(), now.getMonth() - 5, 1, 0, 0, 0, 0);
+
+    // Build the 6 ordered buckets (oldest first) keyed by "YYYY-MM".
+    const buckets = [];
+    const indexByKey = {};
+    for (let i = 0; i < 6; i += 1) {
+      const d = new Date(now.getFullYear(), now.getMonth() - 5 + i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      indexByKey[key] = i;
+      buckets.push({
+        month: key,
+        label: MONTH_LABELS[d.getMonth()],
+        users: 0,
+        quotes: 0,
+        listings: 0,
+        openHouses: 0
+      });
+    }
+
+    const monthKey = (date) => {
+      const d = new Date(date);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    };
+
+    const tally = (rows, field) => {
+      rows.forEach((r) => {
+        const idx = indexByKey[monthKey(r.createdAt)];
+        if (idx !== undefined) buckets[idx][field] += 1;
+      });
+    };
+
+    const sinceWindow = { createdAt: { [Op.gte]: windowStart } };
+    const opts = { where: sinceWindow, attributes: ['createdAt'], raw: true };
+
+    const [users, quotes, listings, openHouses] = await Promise.all([
+      User.findAll(opts),
+      Quote.findAll(opts),
+      ShowMyProperty.findAll(opts),
+      OpenHouse.findAll(opts)
+    ]);
+
+    tally(users, 'users');
+    tally(quotes, 'quotes');
+    tally(listings, 'listings');
+    tally(openHouses, 'openHouses');
+
+    return res.status(200).json({ success: true, data: { series: buckets } });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 // GET /api/admin/users  — list every account (for "View All Users" later)
 exports.listUsers = async (req, res) => {
   try {

@@ -19,6 +19,47 @@ const ratingSummary = async (providerId) => {
 const completedJobsCount = (providerId) =>
   Quote.count({ where: { providerId, status: 'closed' } });
 
+// Safely parses the stored specialties JSON into a string array. Always
+// returns an array ([] on null / malformed / non-array data).
+const parseSpecialties = (raw) => {
+  if (Array.isArray(raw)) return raw;
+  if (raw == null || raw === '') return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+};
+
+// Computes the trust badges for a provider from its profile + rating summary.
+const computeBadges = (json, { averageRating, reviewCount }) => {
+  const badges = [];
+  if (json.emailVerified === true && json.approvalStatus === 'approved') {
+    badges.push('Verified');
+  }
+  if (averageRating >= 4.5 && reviewCount >= 3) {
+    badges.push('Top Rated');
+  }
+  if (json.yearsOfExperience != null && json.yearsOfExperience >= 5) {
+    badges.push('Experienced');
+  }
+  if (json.responseTime && /hour/i.test(json.responseTime)) {
+    badges.push('Fast Responder');
+  }
+  return badges;
+};
+
+// Builds the trust-indicator block (specialties parsed, badges computed) that
+// gets merged into every returned provider object.
+const trustFields = (json, ratings) => ({
+  profilePhoto: json.profilePhoto ?? null,
+  specialties: parseSpecialties(json.specialties),
+  responseTime: json.responseTime ?? null,
+  yearsOfExperience: json.yearsOfExperience ?? null,
+  badges: computeBadges(json, ratings)
+});
+
 // GET /providers?role=&serviceTypeId=&search=&city=&state=&lat=&lng=&radius=
 // When lat+lng+radius are supplied, providers further than `radius` km from
 // (lat, lng) are excluded (Haversine in SQL) and each record carries a
@@ -91,10 +132,12 @@ exports.findAll = async (req, res) => {
         if (json.distanceKm != null) {
           json.distanceKm = Number(Number(json.distanceKm).toFixed(2));
         }
+        const ratings = await ratingSummary(provider.id);
         return {
           ...json,
-          ...(await ratingSummary(provider.id)),
-          completedJobs: await completedJobsCount(provider.id)
+          ...ratings,
+          completedJobs: await completedJobsCount(provider.id),
+          ...trustFields(json, ratings)
         };
       })
     );
@@ -126,10 +169,13 @@ exports.findOne = async (req, res) => {
       }]
     });
 
+    const json = provider.toJSON();
+    const ratings = await ratingSummary(provider.id);
     const data = {
-      ...provider.toJSON(),
-      ...(await ratingSummary(provider.id)),
+      ...json,
+      ...ratings,
       completedJobs: await completedJobsCount(provider.id),
+      ...trustFields(json, ratings),
       reviews
     };
 
