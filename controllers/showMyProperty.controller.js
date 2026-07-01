@@ -61,9 +61,12 @@ exports.create = async (req, res) => {
       photos: photos.length ? photos : null
     });
 
-    // Fan-out notification: every realtor sees the new opportunity.
+    // Fan-out notification: every realtor sees the new opportunity — except the
+    // poster themselves if they happen to be a realtor (it's not their opportunity).
     const realtors = await User.findAll({ where: { role: 'realtor' }, attributes: ['id'] });
-    await Promise.all(realtors.map((r) => safeNotify({
+    await Promise.all(realtors
+      .filter((r) => String(r.id) !== String(userId))
+      .map((r) => safeNotify({
       userId: r.id,
       type: 'show_request_new',
       title: 'New showing opportunity',
@@ -165,6 +168,10 @@ exports.claim = async (req, res) => {
     const agent = await User.findByPk(agentId);
     if (!agent || agent.role !== 'realtor') {
       return res.status(400).json({ success: false, message: 'Only realtors can claim showings.' });
+    }
+    // A realtor who posted the property can't claim their own showing.
+    if (Number(record.userId) === agentId) {
+      return res.status(403).json({ success: false, message: 'You cannot claim a showing you posted yourself.' });
     }
 
     record.assignedAgentId = agentId;
